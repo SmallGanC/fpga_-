@@ -1,0 +1,84 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 2022/04/11 19:36:06
+// Design Name: 
+// Module Name: find_min
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 此程序为找出5个数中的最小值，花了三个时钟，所以输入到输出有效为三个时钟
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+
+
+module find_min(
+    input Clk_p,
+    input Rst_n,
+    input [7:0]Data1,
+    input [7:0]Data2,
+    input [7:0]Data3,
+    input [7:0]Data4,
+    input [7:0]Data5,
+    output reg [7:0]Data_min
+    );
+
+reg [7:0]data_min_12;
+reg [7:0]data_min_34;
+reg [7:0]data_min_5;
+
+always @(posedge Clk_p or negedge Rst_n) begin
+    if(!Rst_n)begin
+        data_min_12<=8'd0;
+        data_min_34<=8'd0;
+        data_min_5 <=8'd0;
+    end
+    else begin
+        data_min_5<=Data5;
+        if(Data1<Data2)
+            data_min_12<=Data1;
+        else
+            data_min_12<=Data2;
+        if(Data3<Data4)
+            data_min_34<=Data3;
+        else
+            data_min_34<=Data4;
+    end
+end
+
+reg [7:0]data_min_1234;
+reg [7:0]data_min_5_r;
+always @(posedge Clk_p or negedge Rst_n) begin
+    if(!Rst_n)begin
+        data_min_1234<=8'd0;
+        data_min_5_r<=8'd0;
+    end
+    else begin
+        data_min_5_r<=data_min_5;
+        if(data_min_12<data_min_34)
+            data_min_1234<=data_min_12;
+        else
+            data_min_1234<=data_min_34;
+    end
+end
+
+always @(posedge Clk_p or negedge Rst_n) begin
+    if(!Rst_n)begin
+        Data_min<=8'd0;
+    end
+    else begin
+        if(data_min_1234<data_min_5_r)
+            Data_min<=data_min_1234;
+        else
+            Data_min<=data_min_5_r;
+    end
+end
+endmodule
