@@ -1,0 +1,291 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 2022/04/11 20:17:18
+// Design Name: 
+// Module Name: Dark_Tran_pic
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+//目前对于一些有雾图片去雾效果一般，整体出现偏暗得情况，对于无雾，经过程序后出现轻微失真、偏暗。
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+
+
+module Dark_Tran_pic(
+    input 					Clk_p,
+    input 					Rst_n,
+    input		[23:0]		Data_in,
+    input 					Vga_VS,
+    input 					Vga_HS,
+    input 					Vga_DE,
+    /////////////test///////////////
+
+	////////////////////////////////
+    output wire [23:0] 		Data_out,
+    output wire 			Vga_VS_o,
+    output wire 			Vga_HS_o,
+    output wire 			Vga_DE_o
+    );
+parameter W_forg                =   210;//取w的值为150/256，w代表了雾的保留度，其值越小，去雾效果越不明显,所以取w=0.85，
+//这样保留一些雾的存在可以使人感受到景深的存在，图像也更符合需求。
+parameter Transmittance_w    =   20;//取t0值防止该值过小
+wire 	[7:0]		shift1_2;
+wire 	[7:0]		shift2_3;
+wire 	[7:0]		shift3_4;
+wire 	[7:0]		shift_out;
+wire 	[7:0]		Dark_min_row1;
+wire 	[7:0]		Atmospheric_num_o;
+
+ //取得RGB三通道得最小值，延时三个时钟周期
+wire	[7:0]		rgb_min;
+ find_min find_min_rgb(
+    . Clk_p(Clk_p),
+    . Rst_n(Rst_n),
+    . Data1(Data_in[23:16]),
+    . Data2(Data_in[15:8]),
+    . Data3(Data_in[7:0]),
+    . Data4(255),
+    . Data5(255),
+    . Data_min(rgb_min)
+    );
+    
+//shift_ram的长度为800，用于5*5最小值滤波 
+c_shift_ram_0 shift_1 (
+  .D		(rgb_min	),      // input wire [7 : 0] D
+  .CLK		(Clk_p		),  	// input wire CLK
+  .SCLR		(			),
+  .SSET		(Vga_DE		),  	// input wire SSET
+  .Q		(shift1_2	)       // output wire [7 : 0] Q
+);
+c_shift_ram_1 shift_2 (
+  .D		(shift1_2	),      // input wire [7 : 0] D
+  .CLK		(Clk_p		),  	// input wire CLK
+  .SCLR		(			),
+  .SSET		(Vga_DE		),  	// input wire SSET
+  .Q		(shift2_3	)       // output wire [7 : 0] Q
+);
+c_shift_ram_2 shift_3 (
+  .D		(shift2_3	),      // input wire [7 : 0] D
+  .CLK		(Clk_p		),  	// input wire CLK
+  .SCLR		(			),
+  .SSET		(Vga_DE		),  	// input wire SSET
+  .Q		(shift3_4	)       // output wire [7 : 0] Q
+);
+c_shift_ram_3 shift_4 (
+  .D		(shift3_4	),      // input wire [7 : 0] D
+  .CLK		(Clk_p		),  	// input wire CLK
+  .SCLR		(			),
+  .SSET		(Vga_DE		),  	// input wire SSET
+  .Q		(shift_out	)       // output wire [7 : 0] Q
+);
+
+//得到5*5矩阵这一列得最小值，延时三个时钟周期
+find_min find_min_roll(
+  . Clk_p		(Clk_p),
+  . Rst_n		(Rst_n),
+  . Data1		(Data_in[7:0]),
+  . Data2		(shift1_2),
+  . Data3		(shift2_3),
+  . Data4		(shift3_4),
+  . Data5		(shift_out),
+  . Data_min	(Dark_min_row1)
+);
+reg 	[7:0]		Dark_min_row2,Dark_min_row3,Dark_min_row4,Dark_min_row5;    
+//将最小值寄存，得到五列的最小值，直接将第一个数据输出到下一节比较，这一拍视为无延时   
+always @(posedge Clk_p or negedge Rst_n) begin
+    if(!Rst_n)begin
+        Dark_min_row2<=8'd0;
+        Dark_min_row3<=8'd0;
+        Dark_min_row4<=8'd0;
+        Dark_min_row5<=8'd0;
+    end
+    else begin
+        Dark_min_row2<=Dark_min_row1;
+        Dark_min_row3<=Dark_min_row2;
+        Dark_min_row4<=Dark_min_row3;
+        Dark_min_row5<=Dark_min_row4;
+    end
+end
+
+//比较最小值，延时三个时钟
+wire 	[7:0]			Dark_data;//输出暗通道值
+find_min find_min_all(
+    . Clk_p(Clk_p),
+    . Rst_n(Rst_n),
+    . Data1(Dark_min_row1),
+    . Data2(Dark_min_row2),
+    . Data3(Dark_min_row3),
+    . Data4(Dark_min_row4),
+    . Data5(Dark_min_row5),
+    . Data_min(Dark_data)
+    );
+    
+
+//得到这一帧图像的A值用于下一帧，此处无延时
+reg  [7:0]		Atmospheric_num_reg;
+wire [7:0]		Atmospheric_num;
+always @(posedge Clk_p or negedge Rst_n) begin
+    if(!Rst_n)begin
+        Atmospheric_num_reg<=0;
+    end
+    else if(!Vga_VS_delay)begin        //在有效期找出最大值
+        if(Atmospheric_num_reg<Dark_data)
+            Atmospheric_num_reg<=Dark_data;
+        else
+            Atmospheric_num_reg<=Atmospheric_num_reg; 
+    end
+    else Atmospheric_num_reg<=0;
+end
+
+assign Atmospheric_num=((Vga_VS)&(!Vga_VS_delay))?Atmospheric_num_reg:Atmospheric_num;
+
+//计算出A*t(x)
+wire 	[7:0]		A_Transmittance;
+reg 	[7:0]		A_Transmittance_r;
+reg 	[15:0]		Variable_At;
+wire 	[15:0]		Variable_At0;
+assign Variable_At0=Transmittance_w* Atmospheric_num;//A*t0
+
+
+//得到A*t(x)=A-w*J(x)的值，延时两个时钟
+always @(posedge Clk_p or negedge Rst_n) begin
+    if(!Rst_n)begin
+		//A_Transmittance<=8'd0;
+        A_Transmittance_r<=8'd0;
+        Variable_At<=16'd0;
+    end
+    else begin
+        Variable_At<=W_forg* Dark_data;      //w*J(x)
+        A_Transmittance_r<=Atmospheric_num - Variable_At[15:8];//A*t(x)=A-w*J(x)
+    end
+end
+
+assign A_Transmittance=(A_Transmittance_r>Variable_At0[15:8])?A_Transmittance_r:Variable_At0[15:8];//防止透射
+
+//将数据延时用于计算输出，此处延时3+3+3+2=11
+wire 	[23:0]  	RGB_delay;
+c_shift_ram_4 rgb_delay (
+  .D		(Data_in),      	// input wire [23 : 0] D
+  .CLK		(Clk_p),  			// input wire CLK
+  .Q		(RGB_delay)      	// output wire [23 : 0] Q
+);
+
+////////////////
+reg 	[7:0]		A_Transmittance_delay;
+reg 	[7:0]		A_Transmittance_delay0;
+reg 	[15:0]		R_in_A;						//I(x)*A
+reg 	[15:0]		G_in_A;						//I(x)*A
+reg 	[15:0]		B_in_A;						//I(x)*A
+reg 	[15:0]		A_At;						//A-At
+reg 	[15:0]		Out_UP_r;					//
+reg 	[15:0]		Out_UP_g;					//
+reg 	[15:0]		Out_UP_b;					//
+
+reg 	[15:0]		Variable_JAt0;					//
+reg 	[15:0]		Variable_JAt1;					//
+reg 	[15:0]		Variable_JAt2;					//
+//得到J(x)-A+At(x))*A的值，延时三个时钟
+always @(posedge Clk_p or negedge Rst_n) begin
+     if(!Rst_n)begin
+        R_in_A<=16'd0;
+        G_in_A<=16'd0;
+        B_in_A<=16'd0;
+        A_At<=16'd0;
+        Out_UP_r<=16'd0;
+        Out_UP_g<=16'd0;
+        Out_UP_b<=16'd0;
+        A_Transmittance_delay<=8'd0;
+        A_Transmittance_delay0<=8'd0;
+    end
+    else begin
+		Variable_JAt0=RGB_delay[7:0]		+ A_Transmittance;
+		Variable_JAt1=RGB_delay[15:8]		+ A_Transmittance;
+		Variable_JAt2=RGB_delay[23:16]		+ A_Transmittance;
+		if(Variable_JAt0>Atmospheric_num)						//有可能出现小于0得情况，特别是在无雾的图像上
+			R_in_A<=Variable_JAt0-Atmospheric_num;//J(x)-A+At(x
+		else R_in_A<=0;
+		if(Variable_JAt1>Atmospheric_num)
+			G_in_A<=Variable_JAt1-Atmospheric_num;//J(x)-A+At(x
+		else G_in_A<=0;
+		if(Variable_JAt2>Atmospheric_num)
+			B_in_A<=Variable_JAt2-Atmospheric_num;//J(x)-A+At(x
+		else B_in_A<=0;
+		/*
+		R_in_A<=(RGB_delay[7:0]		+ A_Transmittance)-Atmospheric_num;
+        G_in_A<=(RGB_delay[15:8]	+ A_Transmittance)-Atmospheric_num;
+        B_in_A<=(RGB_delay[23:16]	+ A_Transmittance)-Atmospheric_num;
+		*/
+        //A_At<=(Atmospheric_num-A_Transmittance)*Atmospheric_num;//(A-At)*A
+        Out_UP_r<=R_in_A*Atmospheric_num;//(J(x)-A+At(x))*A
+        Out_UP_g<=G_in_A*Atmospheric_num;
+        Out_UP_b<=B_in_A*Atmospheric_num;
+        A_Transmittance_delay0<=A_Transmittance;
+        A_Transmittance_delay<=A_Transmittance_delay0;         //同步A*t(x)，与计算时候的值保持相同
+    end
+end
+//J（x）*A-A+At(x))/At(x)
+wire [23:0]Data_out_R_reg;//
+wire [23:0]Data_out_G_reg;//
+wire [23:0]Data_out_B_reg;//
+//除法器延时18个时钟周期
+div_gen_0 Div_r (
+  .aclk(Clk_p),                                      	// input wire aclk
+  .s_axis_divisor_tvalid(1),    						// input wire s_axis_divisor_tvalid
+  .s_axis_divisor_tdata(A_Transmittance_delay),      	// input wire [7 : 0] s_axis_divisor_tdata
+  .s_axis_dividend_tvalid(1),  							// input wire s_axis_dividend_tvalid
+  .s_axis_dividend_tdata(Out_UP_r),    					// input wire [15 : 0] s_axis_dividend_tdata
+  .m_axis_dout_tvalid(),          						// output wire m_axis_dout_tvalid
+  .m_axis_dout_tdata(Data_out_R_reg)            		// output wire [23 : 0] m_axis_dout_tdata
+);
+div_gen_1 Div_g (
+  .aclk(Clk_p),                                      	// input wire aclk
+  .s_axis_divisor_tvalid(1),    						// input wire s_axis_divisor_tvalid
+  .s_axis_divisor_tdata(A_Transmittance_delay),      	// input wire [7 : 0] s_axis_divisor_tdata
+  .s_axis_dividend_tvalid(1),  							// input wire s_axis_dividend_tvalid
+  .s_axis_dividend_tdata(Out_UP_g),    					// input wire [15 : 0] s_axis_dividend_tdata
+  .m_axis_dout_tvalid(),          						// output wire m_axis_dout_tvalid
+  .m_axis_dout_tdata(Data_out_G_reg)            		// output wire [23 : 0] m_axis_dout_tdata
+);
+div_gen_2 Div_b (
+  .aclk(Clk_p),                                     	// input wire aclk
+  .s_axis_divisor_tvalid(1),    						// input wire s_axis_divisor_tvalid
+  .s_axis_divisor_tdata(A_Transmittance_delay),      	// input wire [7 : 0] s_axis_divisor_tdata
+  .s_axis_dividend_tvalid(1),  							// input wire s_axis_dividend_tvalid
+  .s_axis_dividend_tdata(Out_UP_b),    					// input wire [15 : 0] s_axis_dividend_tdata
+  .m_axis_dout_tvalid(),          						// output wire m_axis_dout_tvalid
+  .m_axis_dout_tdata(Data_out_B_reg)            		// output wire [23 : 0] m_axis_dout_tdata
+);
+wire [15:0]Data_out_r_r;//
+wire [15:0]Data_out_g_r;//
+wire [15:0]Data_out_b_r;//
+
+assign Data_out_r_r	=	(Data_out_B_reg[23:8]>255)	?	8'd255	:	Data_out_B_reg[23:8];
+assign Data_out_g_r	=	(Data_out_G_reg[23:8]>255)	?	8'd255	:	Data_out_G_reg[23:8];
+assign Data_out_b_r	=	(Data_out_R_reg[23:8]>255)	?	8'd255	:	Data_out_R_reg[23:8];
+assign Data_out={Data_out_r_r[7:0],Data_out_g_r[7:0],Data_out_b_r[7:0]};
+//assign Data_out={B_in_A[7:0],G_in_A[7:0],R_in_A[7:0]};
+
+//对三个video信号进行延时,除法18+3+2+3+3+3=32
+wire 		Vga_VS_delay;
+wire 		Vga_HS_delay;
+wire 		Vga_DE_delay;
+c_shift_ram_video video_delay (
+  .D		({Vga_VS,Vga_HS,Vga_DE}),      					// input wire [23 : 0] D
+  .CLK		(Clk_p),  										// input wire CLK
+  .Q		({Vga_VS_delay,Vga_HS_delay,Vga_DE_delay})      // output wire [23 : 0] Q
+);
+//
+assign Vga_VS_o=Vga_VS_delay;
+assign Vga_HS_o=Vga_HS_delay;
+assign Vga_DE_o=Vga_DE_delay;
+
+endmodule
